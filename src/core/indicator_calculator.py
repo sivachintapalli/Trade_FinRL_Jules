@@ -139,5 +139,3 @@ if __name__ == '__main__':
         print("RSI series is all NaNs (perhaps data too short or period too long).")
 
     print("\n--- RSI Calculator Test Complete ---")
-
-[end of src/core/indicator_calculator.py]

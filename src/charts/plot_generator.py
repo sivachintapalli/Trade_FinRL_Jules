@@ -410,5 +410,3 @@ if __name__ == '__main__':
     else:
         print("Failed to get or generate sample data for chart testing.")
     print("\n--- Plot Generator Test Complete ---")
-
-[end of src/charts/plot_generator.py]
