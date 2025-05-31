@@ -1,55 +1,98 @@
+"""
+Custom Simple Moving Average (SMA) Indicator.
+
+This file provides an example implementation of a custom technical indicator,
+the Simple Moving Average (SMA). It demonstrates how to subclass the
+`CustomIndicator` interface to create new indicators that can be dynamically
+loaded and utilized by the trading analysis platform.
+"""
 import pandas as pd
 from src.core.custom_indicator_interface import CustomIndicator
 
 class SimpleMovingAverage(CustomIndicator):
     """
-    Calculates the Simple Moving Average (SMA) for a given column and period.
+    Calculates the Simple Moving Average (SMA) for a specified data column
+    over a given period.
+
+    This indicator inherits from `CustomIndicator` and implements the required
+    `__init__` and `calculate` methods.
+
+    Parameters:
+        period (int): The lookback window for calculating the SMA. For example,
+                      a period of 20 means the SMA is calculated over the
+                      last 20 data points.
+        column (str): The name of the column in the input DataFrame on which
+                      the SMA is to be calculated (e.g., 'Close', 'High').
     """
 
     def __init__(self, period: int = 20, column: str = 'Close'):
         """
-        Initializes the SimpleMovingAverage indicator.
+        Initializes the SimpleMovingAverage indicator with specified parameters.
 
         Args:
-            period (int): The lookback period for the SMA. Defaults to 20.
-            column (str): The name of the column in the DataFrame to calculate SMA on.
-                          Defaults to 'Close'.
+            period (int, optional): The lookback period for the SMA.
+                                    Must be a positive integer. Defaults to 20.
+            column (str, optional): The name of the DataFrame column to use for
+                                    SMA calculation. Must be a non-empty string.
+                                    Defaults to 'Close'.
+
+        Raises:
+            ValueError: If `period` is not a positive integer or if `column`
+                        is an empty string.
         """
-        # Call super().__init__ to store parameters
+        # Call super().__init__ to store parameters (period, column) as instance attributes
+        # and make them available for get_params() and UI generation.
         super().__init__(period=period, column=column)
 
-        # Validate parameters specific to this indicator
+        # Validate parameters specific to this indicator after they are set by super()
         if not isinstance(self.period, int) or self.period <= 0:
-            raise ValueError("SMA period must be a positive integer.")
-        if not isinstance(self.column, str) or not self.column:
-            raise ValueError("SMA column name must be a non-empty string.")
+            raise ValueError("SMA 'period' must be a positive integer.")
+        if not isinstance(self.column, str) or not self.column: # Check if string is empty
+            raise ValueError("SMA 'column' name must be a non-empty string.")
 
 
     def calculate(self, data_df: pd.DataFrame) -> pd.Series:
         """
-        Calculates the Simple Moving Average.
+        Calculates the Simple Moving Average based on the initialized parameters.
 
         Args:
-            data_df: Pandas DataFrame with OHLCV data. Must contain the column specified
-                     during initialization (e.g., 'Close').
+            data_df (pd.DataFrame): A pandas DataFrame containing the financial data.
+                                    This DataFrame must include the column specified
+                                    as `self.column` during initialization.
 
         Returns:
-            A Pandas Series containing the calculated SMA values.
-            The index will match the input data_df's index.
-            The series will have NaN values for the initial part where SMA cannot be computed.
+            pd.Series: A pandas Series containing the calculated SMA values. The index
+                       of this Series will align with the index of the input `data_df`.
+                       The Series will be named descriptively (e.g., "SMA_20_Close").
+                       The initial `self.period - 1` values will be NaN, as a full
+                       lookback window is not yet available.
 
         Raises:
-            ValueError: If the specified column is not found in the DataFrame.
+            ValueError: If the column specified by `self.column` is not found in
+                        the input `data_df`.
         """
-        # Parameters (self.period, self.column) are already validated in __init__
-        # and set by super().__init__()
+        # self.period and self.column are already validated in __init__ and available.
 
         if self.column not in data_df.columns:
-            raise ValueError(f"Column '{self.column}' not found in the input DataFrame. Available columns: {data_df.columns.tolist()}")
+            raise ValueError(
+                f"Column '{self.column}' not found in the input DataFrame. "
+                f"Available columns: {data_df.columns.tolist()}"
+            )
 
-        # Use min_periods=self.period to ensure enough data for each calculation window
-        sma_series = data_df[self.column].rolling(window=self.period, min_periods=self.period).mean()
-        sma_series.name = f"SMA_{self.period}_{self.column}" # Assign a descriptive name to the series
+        # Calculate SMA using pandas rolling mean.
+        # `min_periods=self.period` ensures that the SMA is calculated only when
+        # there are enough data points for the full window, resulting in NaNs
+        # at the beginning of the series where the window is not yet filled.
+        # This is equivalent to the standard SMA calculation where the first
+        # `period - 1` values are undefined.
+        sma_series = data_df[self.column].rolling(
+            window=self.period,
+            min_periods=self.period # Ensures enough data for each calculation
+        ).mean()
+
+        # Assign a descriptive name to the output series for better identification
+        # in charts or when merging with other data.
+        sma_series.name = f"SMA_{self.period}_{self.column}"
         return sma_series
 
 if __name__ == '__main__':
@@ -65,57 +108,66 @@ if __name__ == '__main__':
     }
     idx = pd.to_datetime([f'2023-01-{i:02d}' for i in range(1, 17)])
     dummy_df = pd.DataFrame(data, index=idx)
+    dummy_df.index.name = "Date"
 
-    print("Testing SimpleMovingAverage indicator...")
+    print("--- Testing SimpleMovingAverage Indicator ---")
 
     try:
         # Test with default parameters (period=20, column='Close')
         # Since dummy_df has only 16 data points, period 20 will result in all NaNs
         # when min_periods=period. This is expected.
-        print(f"\nInstantiating Indicator: SimpleMovingAverage(period=20, column='Close') (default)")
-        sma_default = SimpleMovingAverage()
-        sma_default_values = sma_default.calculate(dummy_df.copy()) # Pass copy
-        print("SMA with default parameters (period=20) on 16 data points:")
+        print(f"\nInstantiating Indicator: SimpleMovingAverage(period=20, column='Close') (default values in class)")
+        sma_default = SimpleMovingAverage() # Uses period=20, column='Close'
+        print(f"Indicator instance: {sma_default}")
+        sma_default_values = sma_default.calculate(dummy_df.copy())
+        print(f"SMA with default parameters (period=20) on {len(dummy_df)} data points (series name: {sma_default_values.name}):")
         print(sma_default_values)
-        print("Note: Default period is 20, so expect all NaNs with this small dataset as min_periods=20.")
+        assert sma_default_values.isna().sum() == len(dummy_df), \
+            "Expected all NaNs for period 20 on 16 data points with min_periods=20"
 
-        # Test with specific parameters
+
+        # Test with specific parameters that should yield some results
         print(f"\nInstantiating Indicator: SimpleMovingAverage(period=5, column='Close')")
         sma_5_close = SimpleMovingAverage(period=5, column='Close')
-        sma_5_close_values = sma_5_close.calculate(dummy_df.copy()) # Pass copy
-        print("SMA (period=5, column='Close'):")
-        print(sma_5_close_values.head(10)) # Show first 10
+        print(f"Indicator instance: {sma_5_close}")
+        sma_5_close_values = sma_5_close.calculate(dummy_df.copy())
+        print(f"SMA (period=5, column='Close', series name: {sma_5_close_values.name}):")
+        print(sma_5_close_values.head(10))
+        assert sma_5_close_values.isna().sum() == 4, "Expected first 4 values to be NaN for period 5"
 
         print(f"\nInstantiating Indicator: SimpleMovingAverage(period=3, column='High')")
         sma_3_high = SimpleMovingAverage(period=3, column='High')
-        sma_3_high_values = sma_3_high.calculate(dummy_df.copy()) # Pass copy
-        print("SMA (period=3, column='High'):")
-        print(sma_3_high_values.head(10)) # Show first 10
+        print(f"Indicator instance: {sma_3_high}")
+        sma_3_high_values = sma_3_high.calculate(dummy_df.copy())
+        print(f"SMA (period=3, column='High', series name: {sma_3_high_values.name}):")
+        print(sma_3_high_values.head(10))
+        assert sma_3_high_values.isna().sum() == 2, "Expected first 2 values to be NaN for period 3"
 
-        # Test error case: column not found
-        print("\nTesting error case: column not found...")
-        sma_error_col = SimpleMovingAverage(column='NonExistent') # Instantiation is fine
-        print(f"Instantiated Indicator: {sma_error_col}")
+
+        # Test error case: column not found during calculate
+        print("\n--- Testing Error Case: Column Not Found (during calculate) ---")
+        sma_error_col_calc = SimpleMovingAverage(column='NonExistentColumn')
+        print(f"Instantiated Indicator: {sma_error_col_calc}")
         try:
-            sma_error_col.calculate(dummy_df.copy()) # Pass copy
+            sma_error_col_calc.calculate(dummy_df.copy())
         except ValueError as e:
             print(f"Correctly caught error: {e}")
 
         # Test error case: invalid period in constructor
-        print("\nTesting error case: invalid period in constructor (period=0)...")
+        print("\n--- Testing Error Case: Invalid Period (in constructor, period=0) ---")
         try:
             SimpleMovingAverage(period=0)
         except ValueError as e:
             print(f"Correctly caught error: {e}")
 
-        print("\nTesting error case: invalid period in constructor (period=-5)...")
+        print("\n--- Testing Error Case: Invalid Period (in constructor, period=-5) ---")
         try:
             SimpleMovingAverage(period=-5)
         except ValueError as e:
             print(f"Correctly caught error: {e}")
 
-        # Test error case: invalid column in constructor
-        print("\nTesting error case: invalid column name in constructor (column='')...")
+        # Test error case: invalid column name in constructor
+        print("\n--- Testing Error Case: Invalid Column Name (in constructor, column='') ---")
         try:
             SimpleMovingAverage(column="")
         except ValueError as e:
@@ -124,4 +176,8 @@ if __name__ == '__main__':
     except Exception as e:
         print(f"An unexpected error occurred during testing: {e}")
 
-    print("\nReminder: Test this new indicator with 'python -m src.core.indicator_calculator' as well.")
+    print("\n--- SimpleMovingAverage Indicator Test Complete ---")
+    # The prompt in the original file "Reminder: Test this new indicator with 'python -m src.core.indicator_calculator' as well."
+    # is slightly misleading, as this is a custom indicator, not part of indicator_calculator.py.
+    # It would be tested via the application UI or by the indicator_manager discovery tests.
+    print("\nNote: This custom indicator would be discovered by `indicator_manager.py` and usable in the Streamlit UI.")
