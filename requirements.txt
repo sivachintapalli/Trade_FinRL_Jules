@@ -1,3 +1,4 @@
+
 # Core ML and Data Handling
 torch
 scikit-learn
@@ -18,3 +19,12 @@ plotly
 # pytest # If pytest was used
 # pylint # For linting
 # unittest # unittest is a built-in module, not typically listed here.
+=======
+yfinance
+plotly
+streamlit
+pandas
+nbformat
+pytest
+pytest-mock
+
