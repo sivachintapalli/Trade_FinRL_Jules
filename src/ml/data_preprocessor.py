@@ -72,7 +72,11 @@ class MLDataPreprocessor:
             X_val: Validation features DataFrame.
             X_test: Test features DataFrame.
         Returns:
-            Scaled X_train, X_val, X_test as Pandas DataFrames.
+            A tuple containing:
+                - Scaled X_train as Pandas DataFrame.
+                - Scaled X_val as Pandas DataFrame.
+                - Scaled X_test as Pandas DataFrame.
+                - The fitted sklearn.preprocessing.MinMaxScaler object.
         """
         scaler = MinMaxScaler()
         X_train_scaled = scaler.fit_transform(X_train)
@@ -83,7 +87,7 @@ class MLDataPreprocessor:
         X_val_scaled_df = pd.DataFrame(X_val_scaled, columns=X_val.columns, index=X_val.index)
         X_test_scaled_df = pd.DataFrame(X_test_scaled, columns=X_test.columns, index=X_test.index)
 
-        return X_train_scaled_df, X_val_scaled_df, X_test_scaled_df
+        return X_train_scaled_df, X_val_scaled_df, X_test_scaled_df, scaler
 
     def create_sequences(self, features_df: pd.DataFrame, target_series: pd.Series, sequence_length: int):
         """
@@ -166,9 +170,10 @@ if __name__ == '__main__':
         print(f"\nShapes: X_train_df={X_train_df.shape}, X_val_df={X_val_df.shape}, X_test_df={X_test_df.shape}")
 
         # 3. Scale Data
-        X_train_scaled, X_val_scaled, X_test_scaled = preprocessor.scale_data(X_train_df, X_val_df, X_test_df)
+        X_train_scaled, X_val_scaled, X_test_scaled, fitted_scaler = preprocessor.scale_data(X_train_df, X_val_df, X_test_df)
         print("\nScaled X_train_scaled head:")
         print(X_train_scaled.head())
+        print(f"\nFitted Scaler: {fitted_scaler}")
 
         # 4. Create Sequences
         sequence_length = 10
