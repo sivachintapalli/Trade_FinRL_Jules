@@ -10,6 +10,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import joblib
+import json
 
 # Assuming the script is run from the root of the project or src folder is in PYTHONPATH
 # Adjust import paths if necessary based on your project structure
@@ -87,8 +89,17 @@ def train_model(args):
         return
 
     # Scale Data
-    X_train_scaled_df, X_val_scaled_df, X_test_scaled_df = \
+    X_train_scaled_df, X_val_scaled_df, X_test_scaled_df, scaler_object = \
         preprocessor.scale_data(X_train_df, X_val_df, X_test_df)
+
+    # Save the scaler object
+    scaler_save_path = args.model_save_path.replace(".pth", "_scaler.joblib")
+    try:
+        joblib.dump(scaler_object, scaler_save_path)
+        print(f"Scaler object saved to {scaler_save_path}")
+    except Exception as e:
+        print(f"Error saving scaler: {e}")
+        # Optionally, decide if training should continue if scaler saving fails
 
     # Create Sequences
     X_train_seq, y_train_seq = preprocessor.create_sequences(X_train_scaled_df, y_train_series, args.sequence_length)
@@ -113,6 +124,16 @@ def train_model(args):
     # --- Model, Loss, Optimizer Initialization ---
     input_size = X_train_seq.shape[2]  # Number of features per time step
     output_size = 1  # For binary classification
+
+    # Save input_size
+    input_size_save_path = args.model_save_path.replace(".pth", "_input_size.json")
+    try:
+        with open(input_size_save_path, 'w') as f:
+            json.dump({'input_size': input_size}, f)
+        print(f"Model input_size ({input_size}) saved to {input_size_save_path}")
+    except Exception as e:
+        print(f"Error saving input_size: {e}")
+        # Optionally, decide if training should continue
 
     model = LSTMModel(input_size, args.hidden_size, args.num_layers, output_size, dropout_prob=args.dropout).to(device)
     criterion = nn.BCELoss()

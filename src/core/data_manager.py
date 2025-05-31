@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timedelta
 
 CACHE_DIR = "data/cache"
-CACHE_FILE = os.path.join(CACHE_DIR, "SPY_daily.csv")
 
 def fetch_spy_data(ticker_symbol="SPY", period="5y", interval="1d", use_cache=True):
     """
@@ -26,131 +25,162 @@ def fetch_spy_data(ticker_symbol="SPY", period="5y", interval="1d", use_cache=Tr
             print(f"Error creating cache directory {CACHE_DIR}: {e}")
             return None
 
-    if use_cache and os.path.exists(CACHE_FILE):
+    cache_file_path = os.path.join(CACHE_DIR, f"{ticker_symbol.upper()}_daily.csv")
+
+    data = None # Initialize data to None
+
+    if use_cache and os.path.exists(cache_file_path):
         try:
-            # Check cache file modification time
-            mod_time = os.path.getmtime(CACHE_FILE)
+            mod_time = os.path.getmtime(cache_file_path)
             if datetime.now() - datetime.fromtimestamp(mod_time) < timedelta(days=1):
-                print(f"Loading SPY data from cache: {CACHE_FILE}")
-                return pd.read_csv(CACHE_FILE, index_col='Date', parse_dates=True)
+                print(f"Loading {ticker_symbol.upper()} data from cache: {cache_file_path}")
+                data = pd.read_csv(cache_file_path, index_col='Date', parse_dates=True)
             else:
-                print("Cache is older than 1 day. Fetching fresh data.")
+                print(f"Cache for {ticker_symbol.upper()} is older than 1 day. Fetching fresh data.")
         except Exception as e:
-            print(f"Error reading from cache or checking mod time: {e}. Fetching fresh data.")
+            print(f"Error reading from cache or checking mod time for {ticker_symbol.upper()}: {e}. Fetching fresh data.")
 
-    print(f"Fetching fresh data for {ticker_symbol}...")
-    try:
-        stock = yf.Ticker(ticker_symbol)
-        data = stock.history(period=period, interval=interval)
+    was_fetched_freshly = False
+    if data is None: # If cache was not used, not valid, or failed to load
+        print(f"Fetching fresh data for {ticker_symbol.upper()}...")
+        try:
+            stock = yf.Ticker(ticker_symbol)
+            fetched_data = stock.history(period=period, interval=interval)
 
-        if data.empty:
-            print(f"No data found for {ticker_symbol} for the period {period}.")
+            if fetched_data.empty:
+                print(f"No data found for {ticker_symbol.upper()} for the period {period}.")
+                return None
+            data = fetched_data
+            was_fetched_freshly = True
+        except Exception as e:
+            print(f"Error fetching data for {ticker_symbol.upper()} using yfinance: {e}")
             return None
 
-        # Ensure the index is DatetimeIndex and named 'Date'
+    if data is None: # Should only happen if initial cache load failed AND fetch failed
+        print(f"Failed to load or fetch data for {ticker_symbol.upper()}.")
+        return None
+
+    # ==== COMMON DATA PROCESSING ====
+    # Applied to data whether loaded from cache or freshly fetched.
+    try:
+        # 1. Index processing: Ensure DatetimeIndex, UTC, and named 'Date'
         if not isinstance(data.index, pd.DatetimeIndex):
-            data.index = pd.to_datetime(data.index)
+            data.index = pd.to_datetime(data.index, utc=True)
+        elif data.index.tz is None:
+            data.index = data.index.tz_localize('UTC')
+        else:
+            data.index = data.index.tz_convert('UTC')
         data.index.name = 'Date'
 
-        # Standardize column names to TitleCase, paying attention to 'Volume'
+        # 2. Standardize column names
         new_columns = {}
-        for col in data.columns:
-            if col.lower() == 'adj close': # yfinance often includes 'Adj Close'
-                new_columns[col] = 'Adj Close'
+        for col in data.columns: # Iterate over current columns
+            if col.lower() == 'adj close':
+                new_columns[col] = 'Adj Close' # Preserve 'Adj Close' casing from yfinance
             else:
-                new_columns[col] = col.title()
+                new_columns[col] = col.title() # Title case others
         data.rename(columns=new_columns, inplace=True)
-        # Ensure 'Volume' is exactly 'Volume' if it exists
+
+        # Ensure 'Volume' is exactly 'Volume' if it exists in any case
         if 'volume' in data.columns and 'Volume' not in data.columns:
-             data.rename(columns={'volume': 'Volume'}, inplace=True)
-        elif 'Volume' not in data.columns and any(c.lower() == 'volume' for c in data.columns):
-            # find the actual casing yfinance used for volume if it wasn't 'volume' or 'Volume'
-            for c in data.columns:
-                if c.lower() == 'volume':
-                    data.rename(columns={c: 'Volume'}, inplace=True)
+            data.rename(columns={'volume': 'Volume'}, inplace=True)
+        elif 'Volume' not in data.columns: # Check if other cases of 'volume' exist
+            for col_name in list(data.columns): # Iterate over a copy for renaming
+                if col_name.lower() == 'volume':
+                    data.rename(columns={col_name: 'Volume'}, inplace=True)
                     break
 
-        # Verify data types (mostly handled by yfinance, but good to ensure)
-        # Ensure OHLCV are numeric
-        cols_to_check_numeric = ['Open', 'High', 'Low', 'Close']
-        # Add Volume, handling case variations
-        if 'Volume' in data.columns:
-            cols_to_check_numeric.append('Volume')
-        elif 'volume' in data.columns: # This case should ideally be handled by the rename above
-            cols_to_check_numeric.append('volume')
-            # Standardize to 'Volume'
-            data.rename(columns={'volume': 'Volume'}, inplace=True) # Ensure it's 'Volume' for the numeric check
-
-        for col in cols_to_check_numeric:
-            if col in data.columns: # Check if column exists before trying to convert
+        # 3. Convert OHLCV columns to numeric
+        cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
+        for col in cols_to_numeric:
+            if col in data.columns:
                 data[col] = pd.to_numeric(data[col], errors='coerce')
 
-        # Handle missing data - forward fill
-        initial_nans = data.isna().sum().sum()
-        if initial_nans > 0:
-            print(f"Found {initial_nans} NaN values. Applying forward fill.")
+        # 4. Round float columns to 5 decimal places for consistency
+        float_cols = ['Open', 'High', 'Low', 'Close', 'Adj Close']
+        for col in float_cols:
+            if col in data.columns and data[col].dtype == 'float64':
+                data[col] = data[col].round(5)
+
+        # 5. Handle missing data (NaNs)
+        if data.isna().any().any():
+            # print(f"NaN values found in data for {ticker_symbol.upper()}. Applying ffill then bfill.")
             data.ffill(inplace=True)
-            # If NaNs are still present at the beginning (after ffill), backfill them
-            if data.iloc[0].isna().sum() > 0:
-                print("NaNs found at the beginning after ffill. Applying backfill for initial rows.")
-                data.bfill(inplace=True)
+            data.bfill(inplace=True)
 
-        # Drop any rows that still have NaNs after ffill/bfill (e.g., if entire column was NaN initially)
-        rows_before_dropna = len(data)
-        data.dropna(inplace=True)
-        if len(data) < rows_before_dropna:
-            print(f"Dropped {rows_before_dropna - len(data)} rows due to remaining NaNs after fill.")
+        # 6. Drop rows if critical columns still have NaNs
+        critical_cols = ['Open', 'High', 'Low', 'Close']
+        # Ensure critical_cols only contains columns present in the DataFrame
+        cols_to_check_for_nan_drop = [col for col in critical_cols if col in data.columns]
+        if cols_to_check_for_nan_drop:
+            rows_before_dropna = len(data)
+            data.dropna(subset=cols_to_check_for_nan_drop, inplace=True)
+            if len(data) < rows_before_dropna:
+                print(f"Dropped {rows_before_dropna - len(data)} rows with NaNs in critical columns for {ticker_symbol.upper()}.")
 
-        if use_cache:
-            try:
-                data.to_csv(CACHE_FILE)
-                print(f"Data cached to {CACHE_FILE}")
-            except Exception as e:
-                print(f"Error caching data to {CACHE_FILE}: {e}")
-
-        return data
-    except Exception as e:
-        print(f"Error fetching data for {ticker_symbol} using yfinance: {e}")
+    except Exception as e_process:
+        print(f"Error during common data processing for {ticker_symbol.upper()}: {e_process}")
         return None
+    # ==== END COMMON DATA PROCESSING ====
+
+    # Cache the fully processed data if it was freshly fetched
+    if was_fetched_freshly and use_cache:
+        try:
+            data.to_csv(cache_file_path)
+            print(f"Data cached to {cache_file_path}")
+        except Exception as e:
+            print(f"Error caching fully processed data to {cache_file_path}: {e}")
+
+    return data
 
 if __name__ == '__main__':
     print("--- Testing Data Manager ---")
 
-    print("\n--- Attempt 1: Fetching SPY data (potentially using cache) ---")
-    spy_data_c1 = fetch_spy_data(ticker_symbol="SPY", period="5y")
-    if spy_data_c1 is not None:
-        print("\nSPY Data (First Fetch) Head:")
-        print(spy_data_c1.head())
-        print("\nSPY Data (First Fetch) Tail:")
-        print(spy_data_c1.tail())
-        print(f"\nData dimensions: {spy_data_c1.shape}")
-        print(f"\nData types:\n{spy_data_c1.dtypes}")
-        print(f"\nIndex type: {type(spy_data_c1.index)}")
-        print(f"\nIndex name: {spy_data_c1.index.name}")
-        print(f"\nAny remaining NaNs: {spy_data_c1.isna().sum().sum()}")
+    # Test with AAPL
+    print("\n--- Attempt 1: Fetching AAPL data (first time, should fetch) ---")
+    aapl_data_c1 = fetch_spy_data(ticker_symbol="AAPL", period="1y")
+    if aapl_data_c1 is not None:
+        print("\nAAPL Data (First Fetch) Head:")
+        print(aapl_data_c1.head())
+        print(f"Data dimensions: {aapl_data_c1.shape}")
 
-    print("\n--- Attempt 2: Fetching SPY data again (should use cache if first attempt was successful) ---")
-    spy_data_c2 = fetch_spy_data(ticker_symbol="SPY", period="5y")
-    if spy_data_c2 is not None:
-        print("\nSPY Data (Second Fetch) Head:")
-        print(spy_data_c2.head(2)) # Just show a couple of lines to confirm it loaded
-        print(f"\nData dimensions: {spy_data_c2.shape}")
-        print(f"\nAny remaining NaNs: {spy_data_c2.isna().sum().sum()}")
-        if spy_data_c1 is not None and spy_data_c2.equals(spy_data_c1):
-            print("\nData from second fetch is identical to the first (as expected from cache).")
+    print("\n--- Attempt 2: Fetching AAPL data again (should use AAPL cache) ---")
+    aapl_data_c2 = fetch_spy_data(ticker_symbol="AAPL", period="1y")
+    if aapl_data_c2 is not None:
+        print("\nAAPL Data (Second Fetch) Head:")
+        print(aapl_data_c2.head(2))
+        if aapl_data_c1 is not None and aapl_data_c2.equals(aapl_data_c1):
+            print("AAPL data from second fetch is identical to the first (cached).")
         else:
-            print("\nData from second fetch differs or first fetch failed.")
+            print("AAPL data from second fetch differs or first fetch failed.")
 
-    print("\n--- Attempt 3: Fetching 1 month of SPY data without cache ---")
-    spy_data_no_cache = fetch_spy_data(ticker_symbol="SPY", period="1mo", use_cache=False)
-    if spy_data_no_cache is not None:
-        print("\nSPY Data (No Cache - 1mo) Head:")
-        print(spy_data_no_cache.head())
-        print(f"\nData dimensions: {spy_data_no_cache.shape}")
-        print(f"\nAny remaining NaNs: {spy_data_no_cache.isna().sum().sum()}")
+    # Test with SPY to ensure it still works and uses its own cache
+    print("\n--- Attempt 3: Fetching SPY data (first time for SPY in this run, should fetch or use existing SPY cache) ---")
+    spy_data_c1 = fetch_spy_data(ticker_symbol="SPY", period="1y")
+    if spy_data_c1 is not None:
+        print("\nSPY Data (First Fetch for SPY) Head:")
+        print(spy_data_c1.head())
+        print(f"Data dimensions: {spy_data_c1.shape}")
+
+    print("\n--- Attempt 4: Fetching SPY data again (should use SPY cache) ---")
+    spy_data_c2 = fetch_spy_data(ticker_symbol="SPY", period="1y")
+    if spy_data_c2 is not None:
+        print("\nSPY Data (Second Fetch for SPY) Head:")
+        print(spy_data_c2.head(2))
+        if spy_data_c1 is not None and spy_data_c2.equals(spy_data_c1):
+            print("SPY data from second fetch is identical to the first (cached).")
+        else:
+            print("SPY data from second fetch differs or first fetch failed.")
+
+    print("\n--- Attempt 5: Fetching 1 month of AAPL data without cache ---")
+    aapl_data_no_cache = fetch_spy_data(ticker_symbol="AAPL", period="1mo", use_cache=False)
+    if aapl_data_no_cache is not None:
+        print("\nAAPL Data (No Cache - 1mo) Head:")
+        print(aapl_data_no_cache.head())
+        print(f"Data dimensions: {aapl_data_no_cache.shape}")
 
     print("\n--- Testing with a non-existent ticker ---")
-    non_existent_data = fetch_spy_data(ticker_symbol="NONEXISTENTTICKER", period="1mo")
+    non_existent_data = fetch_spy_data(ticker_symbol="NONEXISTENTTICKERXYZ", period="1mo")
     if non_existent_data is None:
         print("Correctly returned None for a non-existent ticker.")
     else:
