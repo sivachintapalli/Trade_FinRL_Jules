@@ -120,21 +120,78 @@ def create_candlestick_chart(df: pd.DataFrame, ticker_symbol: str = "SPY",
 
     # Custom Indicators Traces
     if custom_indicators_data:
-        for indicator in custom_indicators_data:
-            name = indicator.get('name', f'CustomInd_{current_row-1}')
-            series = indicator.get('series')
-            if isinstance(series, pd.Series) and not series.empty:
-                aligned_series = series.reindex(df.index)
-                fig.add_trace(go.Scatter(x=aligned_series.index, y=aligned_series,
-                                         mode='lines', name=name,
-                                         connectgaps=True), # Connect gaps for indicators like SMA
-                              row=current_row, col=1)
-                fig.update_yaxes(title_text=name[:15], row=current_row, col=1) # Shorten long names for y-axis title
-                if num_rows > current_row: # If there are more subplots below
-                    fig.update_xaxes(title_text="", row=current_row, col=1)
-                current_row += 1
-            else:
-                print(f"Warning: Custom indicator '{name}' data is missing or not a Series. Skipping.")
+        main_df_index = df.index # Ensure main_df_index is defined for reindexing
+        for indicator_info in custom_indicators_data:
+            plot_type = indicator_info.get('plot_type', 'simple_series') # Default to simple_series
+            indicator_name = indicator_info.get('name', f'CustomInd_{current_row-1}')
+
+            if plot_type == 'saty_phase_oscillator':
+                spo_df = indicator_info.get('data_df')
+                spo_params = indicator_info.get('params', {})
+
+                if spo_df is not None and isinstance(spo_df, pd.DataFrame) and not spo_df.empty:
+                    # Plot Oscillator
+                    fig.add_trace(go.Scatter(x=main_df_index, y=spo_df['oscillator'].reindex(main_df_index),
+                                             mode='lines', name='Oscillator', connectgaps=True,
+                                             legendgroup=f"group{current_row}", legendgrouptitle_text=indicator_name),
+                                  row=current_row, col=1)
+
+                    # Zone Lines
+                    zone_lines = {
+                        'extended_up_zone': {'y': 100.0, 'color': 'rgba(200,200,200,0.5)'},
+                        'distribution_zone': {'y': 61.8, 'color': 'rgba(150,150,150,0.5)'},
+                        'neutral_up_zone': {'y': 23.6, 'color': 'rgba(100,100,100,0.5)'},
+                        'neutral_down_zone': {'y': -23.6, 'color': 'rgba(100,100,100,0.5)'},
+                        'accumulation_zone': {'y': -61.8, 'color': 'rgba(150,150,150,0.5)'},
+                        'extended_down_zone': {'y': -100.0, 'color': 'rgba(200,200,200,0.5)'}
+                    }
+                    for name, props in zone_lines.items():
+                        fig.add_hline(y=props['y'], line_dash="dot", line_color=props['color'], row=current_row, col=1)
+
+                    # Crossover Signals
+                    show_zones_sig = spo_params.get('show_zone_crosses', True)
+                    show_extremes_sig = spo_params.get('show_extreme_crosses', True)
+                    crossover_signals = {
+                        'leaving_accumulation_signal': {'color': 'yellow', 'symbol': 'circle', 'visible': show_zones_sig},
+                        'leaving_distribution_signal': {'color': 'yellow', 'symbol': 'circle', 'visible': show_zones_sig},
+                        'leaving_extreme_down_signal': {'color': 'lime', 'symbol': 'circle', 'visible': show_extremes_sig},
+                        'leaving_extreme_up_signal': {'color': 'lime', 'symbol': 'circle', 'visible': show_extremes_sig}
+                    }
+                    for sig_col, props in crossover_signals.items():
+                        if props['visible'] and sig_col in spo_df:
+                            series_to_plot = spo_df[sig_col].reindex(main_df_index).dropna() # Changed variable name from 'series'
+                            if not series_to_plot.empty:
+                                fig.add_trace(go.Scatter(x=series_to_plot.index, y=series_to_plot, mode='markers',
+                                                         name=sig_col.replace('_signal','').replace('_', ' ').title(),
+                                                         marker_symbol=props['symbol'], marker_color=props['color'], marker_size=8,
+                                                         legendgroup=f"group{current_row}"),
+                                              row=current_row, col=1)
+
+                    fig.update_yaxes(title_text=indicator_name[:15], row=current_row, col=1, autorange=False, range=[-150, 150]) # Fixed range for SPO
+                    if num_rows > current_row:
+                        fig.update_xaxes(title_text="", row=current_row, col=1)
+                    current_row += 1
+                else:
+                    print(f"Warning: Saty Phase Oscillator data for '{indicator_name}' is missing or not a DataFrame. Skipping.")
+                    # If an empty plot is preferred, increment current_row here too. For now, it skips the row.
+
+            elif plot_type == 'simple_series': # Existing logic adapted
+                series_data = indicator_info.get('series') # Changed variable name from 'series'
+                if isinstance(series_data, pd.Series) and not series_data.empty:
+                    aligned_series = series_data.reindex(main_df_index)
+                    fig.add_trace(go.Scatter(x=aligned_series.index, y=aligned_series,
+                                             mode='lines', name=indicator_name, connectgaps=True,
+                                             legendgroup=f"group{current_row}", legendgrouptitle_text=indicator_name),
+                                  row=current_row, col=1)
+                    fig.update_yaxes(title_text=indicator_name[:15], row=current_row, col=1)
+                    if num_rows > current_row:
+                        fig.update_xaxes(title_text="", row=current_row, col=1)
+                    current_row += 1
+                else:
+                    print(f"Warning: Custom indicator '{indicator_name}' data is missing or not a Series. Skipping.")
+            # else: # Placeholder for other plot types
+            #     print(f"Warning: Unknown plot_type '{plot_type}' for indicator '{indicator_name}'. Skipping.")
+            #     current_row +=1 # Or handle appropriately
 
 
     chart_title = f'{ticker_symbol} Candlestick Chart'
@@ -169,19 +226,28 @@ if __name__ == '__main__':
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
 
+    # Must import after sys.path modification for src.
+    from src.indicators.saty_phase_oscillator import SatyPhaseOscillator
+    import numpy as np # Ensure numpy is available for __main__
+
+    # Monkey-patch numpy for pandas-ta compatibility if needed
+    if not hasattr(np, 'NaN'):
+        np.NaN = np.nan
+
     sample_df = None
     rsi_values = None
     custom_sma_series = None
     custom_ema_series = None
     dummy_ml_signals = None
+    spo_results_df = None # For Saty Phase Oscillator
 
     try:
         from src.core.data_manager import fetch_spy_data
         print("Fetching sample SPY data for chart generation test...")
-        sample_df = fetch_spy_data(period="6mo")
+        sample_df = fetch_spy_data(period="1y") # Longer period for better indicator display
 
         if sample_df is not None and not sample_df.empty:
-            from src.core.indicator_calculator import calculate_rsi # Assuming this is still available
+            from src.core.indicator_calculator import calculate_rsi
             if 'Close' in sample_df.columns:
                 rsi_values = calculate_rsi(sample_df['Close'], period=14)
                 print("RSI calculated.")
@@ -190,32 +256,43 @@ if __name__ == '__main__':
             custom_ema_series = sample_df['Close'].ewm(span=10, adjust=False).mean().rename("EMA_10_Close")
             print("Custom SMA and EMA series created.")
 
-            # Create dummy ML signals for testing
-            signal_values = np.random.choice([0, 1, np.nan], size=len(sample_df)) # Mix of 0, 1, and NaN
+            # Saty Phase Oscillator calculation
+            saty_osc = SatyPhaseOscillator()
+            spo_results_df = saty_osc.calculate(sample_df.copy())
+            print("Saty Phase Oscillator calculated.")
+
+            # Create dummy ML signals
+            signal_values = np.random.choice([0, 1, np.nan], size=len(sample_df))
             dummy_ml_signals = pd.Series(signal_values, index=sample_df.index, name="ML_Signals_Test")
-            # Ensure some non-NaN signals for plotting
-            if pd.isna(dummy_ml_signals.iloc[5:15]).all(): # Ensure some signals exist
-                 dummy_ml_signals.iloc[5:10] = 1
-                 dummy_ml_signals.iloc[10:15] = 0
+            if pd.isna(dummy_ml_signals.iloc[5:25]).all(): # Ensure some signals exist
+                 dummy_ml_signals.iloc[5:15] = 1
+                 dummy_ml_signals.iloc[15:25] = 0
             print("Dummy ML signals created.")
         else:
             raise ValueError("Fetched sample_df is None or empty.")
 
     except Exception as e:
         print(f"Could not fetch/process real data due to: {e}. Using generated dummy data.")
-        dates_rng = pd.date_range(start='2023-01-01', periods=100, freq='B')
-        data_vals = [100 + i + (i%10) - (i%5) for i in range(100)]
+        dates_rng = pd.date_range(start='2023-01-01', periods=200, freq='B') # More data for SPO
+        data_vals = [100 + i + (i%10) - (i%5) + np.sin(i/20)*5 for i in range(200)] # Some oscillation
         sample_df = pd.DataFrame({
-            'Open': [v - 0.5 for v in data_vals],
-            'High': [v + 1 for v in data_vals],
-            'Low': [v - 1 for v in data_vals],
-            'Close': data_vals
+            'Open': [v - 0.5 + np.random.randn()*0.2 for v in data_vals],
+            'High': [v + 1 + np.abs(np.random.randn()*0.5) for v in data_vals],
+            'Low': [v - 1 - np.abs(np.random.randn()*0.5) for v in data_vals],
+            'Close': [v + np.random.randn()*0.3 for v in data_vals]
         }, index=pd.Index(dates_rng, name="Date"))
+        sample_df['High'] = np.maximum(sample_df['High'], sample_df[['Open', 'Close']].max(axis=1))
+        sample_df['Low'] = np.minimum(sample_df['Low'], sample_df[['Open', 'Close']].min(axis=1))
+
 
         if 'Close' in sample_df.columns:
             rsi_values = sample_df['Close'].rolling(window=14).apply(lambda x: x.sum() / 14, raw=True).rename("RSI_14")
             custom_sma_series = sample_df['Close'].rolling(window=20).mean().rename("SMA_20_Close")
             custom_ema_series = sample_df['Close'].ewm(span=10, adjust=False).mean().rename("EMA_10_Close")
+
+            saty_osc_dummy = SatyPhaseOscillator() # On dummy data
+            spo_results_df = saty_osc_dummy.calculate(sample_df.copy())
+
             signal_values = np.random.choice([0, 1], size=len(sample_df))
             dummy_ml_signals = pd.Series(signal_values, index=sample_df.index, name="ML_Signals_Test")
 
@@ -225,17 +302,36 @@ if __name__ == '__main__':
         print(sample_df.head())
 
         custom_indicators_multi = []
-        if custom_sma_series is not None: custom_indicators_multi.append({'name': custom_sma_series.name, 'series': custom_sma_series})
-        if custom_ema_series is not None: custom_indicators_multi.append({'name': custom_ema_series.name, 'series': custom_ema_series})
+        if custom_sma_series is not None:
+            custom_indicators_multi.append({'name': custom_sma_series.name,
+                                             'series': custom_sma_series,
+                                             'plot_type': 'simple_series'})
+        if custom_ema_series is not None:
+            custom_indicators_multi.append({'name': custom_ema_series.name,
+                                             'series': custom_ema_series,
+                                             'plot_type': 'simple_series'})
+        if spo_results_df is not None:
+            custom_indicators_multi.append({
+                'name': 'Saty Phase Osc.',
+                'plot_type': 'saty_phase_oscillator',
+                'data_df': spo_results_df,
+                'params': SatyPhaseOscillator().get_params() # Use default params for plotting example
+            })
 
 
-        print("\nCreating candlestick chart WITH ALL features (RSI, Custom Indicators, ML Signals)...")
+        print("\nCreating candlestick chart WITH ALL features (RSI, Custom Indicators including SPO, ML Signals)...")
         fig_with_all = create_candlestick_chart(sample_df.copy(), ticker_symbol="TEST (All Features)",
                                                 rsi_series=rsi_values, rsi_period=14,
                                                 custom_indicators_data=custom_indicators_multi,
                                                 ml_signals=dummy_ml_signals)
         print("Figure with all features created. If interactive, call fig_with_all.show()")
-        # fig_with_all.show()
+        # fig_with_all.show() # In a script, this would display the chart.
+
+        # Example of saving to HTML (optional)
+        # output_html_path = "candlestick_chart_with_spo.html"
+        # fig_with_all.write_html(output_html_path)
+        # print(f"Chart saved to {output_html_path}")
+
 
         print("\nCreating candlestick chart WITH only ML Signals...")
         fig_ml_only = create_candlestick_chart(sample_df.copy(), ticker_symbol="TEST (ML Signals Only)",
