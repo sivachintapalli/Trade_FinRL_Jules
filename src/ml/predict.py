@@ -1,3 +1,19 @@
+"""
+Machine Learning Model Prediction Module.
+
+This module is responsible for generating predictions using a pre-trained
+LSTM model. It includes functionalities to:
+- Load a saved LSTM model's state dictionary and associated preprocessing
+  artifacts (e.g., scikit-learn scaler, model input size).
+- Preprocess new input data consistently with how the training data was processed.
+  This involves feature engineering, scaling, and creating sequences.
+- Perform inference using the loaded model to obtain raw predictions.
+- Convert these raw predictions into discrete trading signals (e.g., binary
+  buy/sell signals).
+
+The primary function `get_predictions` encapsulates this entire process, while
+`main_cli` provides a command-line interface for execution.
+"""
 # predict.py
 # This file contains the script for making predictions using the trained LSTM model.
 
@@ -8,7 +24,6 @@ import numpy as np
 
 import torch
 from torch.utils.data import DataLoader
-# from sklearn.preprocessing import MinMaxScaler # No longer fitting scaler here
 import joblib # For loading the scaler
 import json # For loading input_size
 
@@ -18,10 +33,10 @@ try:
     from ml.models.lstm_model import LSTMModel
 except ModuleNotFoundError:
     # Fallback for direct execution or different project structure
+    print("Attempting fallback imports for data_preprocessor and lstm_model in predict.py.")
     from data_preprocessor import MLDataPreprocessor, FinancialDataset
     from models.lstm_model import LSTMModel
 
-# Removed get_input_size_for_model function as it's no longer needed.
 
 def get_predictions(
     raw_data_df: pd.DataFrame,
@@ -30,41 +45,59 @@ def get_predictions(
     hidden_size: int,
     num_layers: int,
     dropout: float,
-    batch_size: int = 32 # Default batch_size for prediction, can be overridden
+    batch_size: int = 32
 ) -> pd.Series:
     """
-    Generates predictions using a trained LSTM model and associated artifacts.
+    Generates binary prediction signals using a trained LSTM model and its artifacts.
+
+    This function loads a saved LSTM model, its corresponding data scaler, and input
+    size. It then preprocesses the input `raw_data_df` (feature engineering, scaling,
+    sequence creation) in a manner consistent with the model's training phase.
+    Finally, it performs inference and converts model outputs (probabilities) into
+    binary signals (0 or 1) based on a 0.5 threshold.
 
     Args:
-        raw_data_df: Pandas DataFrame with raw OHLCV data (and potentially RSI).
-        model_path: Path to the trained model (.pth file).
-        sequence_length: Sequence length used during training.
-        hidden_size: Hidden size of the LSTM model.
-        num_layers: Number of layers in the LSTM model.
-        dropout: Dropout probability of the LSTM model.
-        batch_size: Batch size for DataLoader during prediction.
+        raw_data_df (pd.DataFrame): DataFrame containing recent raw OHLCV data (and
+                                    any other features the model was trained on, like RSI).
+                                    The data should be recent enough to form at least one
+                                    sequence of `sequence_length`.
+        model_path (str): Path to the saved PyTorch model state dictionary (`.pth` file).
+                          The paths to the scaler (`_scaler.joblib`) and input size
+                          (`_input_size.json`) files are derived from this base path
+                          by replacing the extension.
+        sequence_length (int): The sequence length the LSTM model was trained with.
+        hidden_size (int): The LSTM hidden layer size of the trained model.
+        num_layers (int): The number of LSTM layers in the trained model.
+        dropout (float): The dropout rate used in the trained model.
+        batch_size (int, optional): Batch size for creating the DataLoader during
+                                    prediction. Defaults to 32.
 
     Returns:
-        A Pandas Series containing binary predictions (0 or 1), indexed by date.
-        The index corresponds to the dates for which predictions could be made.
-        Returns an empty Series if prediction fails or no predictions can be made.
+        pd.Series: A pandas Series containing binary prediction signals (0 or 1),
+                   indexed by date. The dates correspond to the end of each input
+                   sequence for which a prediction is made. Returns an empty Series
+                   if prediction fails or if no valid sequences can be formed from
+                   the input data.
+
     Raises:
-        FileNotFoundError: If model, scaler, or input_size file is not found.
-        Exception: For other errors during the process.
+        FileNotFoundError: If the model file (`.pth`), scaler file (`_scaler.joblib`),
+                           or input size file (`_input_size.json`) cannot be found at
+                           their expected locations (derived from `model_path`).
+        Exception: For other errors encountered during model loading, preprocessing,
+                   or inference (e.g., issues with data dimensions).
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # print(f"Using device: {device}") # Less verbose for function use
 
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model file not found at {model_path}")
+        raise FileNotFoundError(f"Model file not found: {model_path}")
 
     scaler_path = model_path.replace(".pth", "_scaler.joblib")
     input_size_path = model_path.replace(".pth", "_input_size.json")
 
     if not os.path.exists(scaler_path):
-        raise FileNotFoundError(f"Scaler file not found at {scaler_path}")
+        raise FileNotFoundError(f"Scaler file not found: {scaler_path} (expected alongside model)")
     if not os.path.exists(input_size_path):
-        raise FileNotFoundError(f"Input size file not found at {input_size_path}")
+        raise FileNotFoundError(f"Input size file not found: {input_size_path} (expected alongside model)")
 
     preprocessor = MLDataPreprocessor()
 
@@ -75,77 +108,66 @@ def get_predictions(
         input_size = input_size_data['input_size']
 
     # Load Trained Model
-    output_size = 1 # Binary classification
+    output_size = 1 # Assuming binary classification model
     model = LSTMModel(input_size, hidden_size, num_layers, output_size, dropout_prob=dropout).to(device)
     model.load_state_dict(torch.load(model_path, map_location=device))
-    model.eval()
+    model.eval() # Set model to evaluation mode
 
-    # Data Preprocessing for Prediction
-    # Note: feature_engineer drops rows with NaNs, including the last row due to target shift.
-    # The predictions will correspond to the dates *after* these drops.
+    # --- Data Preprocessing for Prediction ---
+    # Feature engineering (consistent with training)
     data_df_predict = preprocessor.feature_engineer(raw_data_df.copy())
 
     if data_df_predict.empty or 'target' not in data_df_predict.columns:
-        # print("Warning: Feature engineering for prediction data resulted in an empty DataFrame or 'target' column missing.")
-        return pd.Series(dtype=int)
+        # print("Warning: Feature engineering for prediction data resulted in empty DataFrame or 'target' missing.")
+        return pd.Series(dtype=int, name="ML_Signal")
 
-    X_predict_df = data_df_predict.drop('target', axis=1)
-    # y_predict_series_actuals = data_df_predict['target'] # Actuals, not strictly needed for prediction output only
+    X_predict_df = data_df_predict.drop('target', axis=1) # Target column not used for prediction input
 
     if X_predict_df.empty:
-        # print("Warning: No data available for prediction after feature engineering.")
-        return pd.Series(dtype=int)
+        # print("Warning: No feature data available for prediction after feature engineering.")
+        return pd.Series(dtype=int, name="ML_Signal")
 
-    # Scaling
+    # Scaling features using the loaded scaler
     X_predict_scaled_np = scaler.transform(X_predict_df)
     X_predict_scaled_df = pd.DataFrame(X_predict_scaled_np, columns=X_predict_df.columns, index=X_predict_df.index)
 
     # Create Sequences
-    # For prediction, we only need X_pred_seq. y_pred_seq_actuals is used if evaluating.
-    # We need a dummy y_series for create_sequences if actuals are not used.
-    # However, our current create_sequences expects y_series to align with features_df.
-    # The dates for predictions will be the index of X_predict_scaled_df from which sequences are made.
-    # The last date for which a sequence can be formed is the last date in X_predict_scaled_df.
-    # The prediction corresponds to the *end* of each sequence.
-
-    # To get predictions aligned with original dates, we need to track indices carefully.
-    # The y_series passed to create_sequences is just for structure, its values don't matter for X_seq generation.
-    dummy_y_for_sequence = pd.Series(np.zeros(len(X_predict_scaled_df)), index=X_predict_scaled_df.index)
+    # A dummy target series is needed for the preprocessor's create_sequences structure,
+    # but its values are not used for generating X_pred_seq.
+    dummy_y_for_sequence_creation = pd.Series(np.zeros(len(X_predict_scaled_df)), index=X_predict_scaled_df.index)
     X_pred_seq, _ = preprocessor.create_sequences(
-        X_predict_scaled_df, dummy_y_for_sequence, sequence_length
+        X_predict_scaled_df, dummy_y_for_sequence_creation, sequence_length
     )
 
     if X_pred_seq.shape[0] == 0:
-        # print("Warning: No sequences created from the prediction data.")
-        return pd.Series(dtype=int)
+        # print("Warning: No sequences created from the prediction data. Input data might be too short.")
+        return pd.Series(dtype=int, name="ML_Signal")
 
-    # The dates for the predictions will correspond to the end of each sequence.
-    # The index of X_predict_scaled_df starts from some date.
-    # If sequence_length is L, the first sequence ends at index L-1 of X_predict_scaled_df.
-    # The prediction for this sequence corresponds to the date at index L-1.
+    # Determine the dates for which predictions will be made.
+    # Predictions correspond to the end of each sequence.
     prediction_dates = X_predict_scaled_df.index[sequence_length - 1:]
 
-
-    # Create Dataset and DataLoader
-    # For prediction, labels in FinancialDataset can be dummy if not used for evaluation within this function
-    dummy_labels_for_dataset = np.zeros(X_pred_seq.shape[0])
-    predict_dataset = FinancialDataset(X_pred_seq, dummy_labels_for_dataset)
+    # Create PyTorch Dataset and DataLoader
+    # Dummy labels are used as they are not needed for inference.
+    dummy_labels_for_predict_dataset = np.zeros(X_pred_seq.shape[0])
+    predict_dataset = FinancialDataset(X_pred_seq, dummy_labels_for_predict_dataset)
     predict_loader = DataLoader(predict_dataset, batch_size=batch_size, shuffle=False)
 
-    # Inference Loop
+    # --- Inference Loop ---
     predictions_binary_list = []
-    with torch.no_grad():
-        for batch_features, _ in predict_loader: # Labels ignored
+    with torch.no_grad(): # Disable gradient calculations during inference
+        for batch_features, _ in predict_loader: # Labels from DataLoader are ignored
             batch_features = batch_features.to(device)
-            outputs = model(batch_features)
-            probs = outputs.cpu().numpy().flatten()
-            binary = (probs > 0.5).astype(int)
-            predictions_binary_list.extend(binary.tolist())
+            outputs_probs = model(batch_features) # Model output (probabilities if sigmoid is last layer)
+            # Convert probabilities to binary predictions (0 or 1) using a 0.5 threshold
+            binary_preds = (outputs_probs.cpu().numpy().flatten() > 0.5).astype(int)
+            predictions_binary_list.extend(binary_preds.tolist())
 
+    # Align predictions with their corresponding dates
     if len(predictions_binary_list) != len(prediction_dates):
-        # This should ideally not happen if logic is correct
-        # print(f"Warning: Mismatch between number of predictions ({len(predictions_binary_list)}) and dates ({len(prediction_dates)}).")
-        # Attempt to align, but this indicates a potential issue.
+        # This case should ideally not be reached if sequence creation and date tracking are correct.
+        # print(f"Warning: Mismatch between number of predictions ({len(predictions_binary_list)}) "
+        #       f"and number of prediction dates ({len(prediction_dates)}). Truncating to shorter length.")
         min_len = min(len(predictions_binary_list), len(prediction_dates))
         predictions_binary_list = predictions_binary_list[:min_len]
         prediction_dates = prediction_dates[:min_len]
@@ -155,26 +177,47 @@ def get_predictions(
 
 
 def main_cli():
-    """ CLI execution function """
+    """
+    Command-Line Interface for generating predictions using a trained LSTM model.
+
+    Parses arguments such as model path, data path (or uses dummy data),
+    and model hyperparameters (which must match the trained model). It then loads
+    the data, calls `get_predictions` to obtain prediction signals, and prints
+    the results.
+    """
     parser = argparse.ArgumentParser(description="Predict using trained LSTM model.")
-    parser.add_argument('--model_path', type=str, required=True, help="Path to the trained model (.pth file). Associated scaler and input_size files will be derived from this path.")
-    parser.add_argument('--data_path', type=str, default="dummy", help="Path to the data CSV for prediction or 'dummy'.")
-    parser.add_argument('--num_dummy_rows', type=int, default=100, help="Number of rows for dummy data if data_path is 'dummy'.")
-    parser.add_argument('--sequence_length', type=int, default=20, help="Sequence length (must match training).")
-    parser.add_argument('--hidden_size', type=int, default=50, help="Number of features in LSTM hidden state (must match trained model).")
-    parser.add_argument('--num_layers', type=int, default=2, help="Number of LSTM layers (must match trained model).")
-    parser.add_argument('--dropout', type=float, default=0.2, help="Dropout probability (must match trained model).")
-    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for prediction.")
+    parser.add_argument('--model_path', type=str, required=True,
+                        help="Path to the trained model (.pth file). Associated scaler and "
+                             "input_size files are expected to be in the same directory "
+                             "with derived names.")
+    parser.add_argument('--data_path', type=str, default="dummy",
+                        help="Path to the input data CSV file for prediction, or 'dummy' "
+                             "to use auto-generated dummy data.")
+    parser.add_argument('--num_dummy_rows', type=int, default=100,
+                        help="Number of rows for dummy data generation if data_path is 'dummy'. "
+                             "Ensure this is sufficient for sequence_length.")
+    parser.add_argument('--sequence_length', type=int, default=20,
+                        help="Sequence length used during model training (must match).")
+    # Model hyperparameters should match the loaded model, these are passed to re-initialize it.
+    parser.add_argument('--hidden_size', type=int, default=50,
+                        help="Number of features in LSTM hidden state (must match trained model).")
+    parser.add_argument('--num_layers', type=int, default=2,
+                        help="Number of LSTM layers (must match trained model).")
+    parser.add_argument('--dropout', type=float, default=0.2,
+                        help="Dropout probability used during training (must match trained model).")
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help="Batch size for DataLoader during prediction.")
     args = parser.parse_args()
 
-    print("Prediction arguments (CLI):")
-    for arg, value in sorted(vars(args).items()):
-        print(f"- {arg}: {value}")
-    print("-" * 30)
+    print("--- Prediction Configuration (CLI) ---")
+    for arg_name, value in sorted(vars(args).items()):
+        print(f"- {arg_name}: {value}")
+    print("------------------------------------")
 
     if args.data_path == "dummy":
         print("Using dummy data for CLI prediction.")
-        num_rows = max(args.num_dummy_rows, args.sequence_length + 60)
+        # Ensure enough dummy rows for at least one sequence after feature engineering lags
+        num_rows = max(args.num_dummy_rows, args.sequence_length + 60) # Added buffer for lags
         dates = pd.date_range(start='2023-01-01', periods=num_rows, freq='B')
         data_payload = {
             'Open': np.random.rand(num_rows) * 100 + 50,
@@ -183,24 +226,19 @@ def main_cli():
             'Close': np.random.rand(num_rows) * 100 + 50,
             'Volume': np.random.rand(num_rows) * 10000 + 1000,
         }
-        # Add RSI if feature engineer needs it (crude check)
-        temp_preprocessor = MLDataPreprocessor()
-        temp_fe_check_df = pd.DataFrame({'Close': [1]*10, 'Volume': [1]*10})
-        if 'RSI' in temp_preprocessor.feature_engineer(temp_fe_check_df).columns:
-             data_payload['RSI'] = np.random.rand(num_rows) * 100
         raw_df_for_prediction = pd.DataFrame(data_payload, index=dates)
     else:
-        print(f"Loading data for CLI prediction from {args.data_path}")
+        print(f"Loading data for CLI prediction from: {args.data_path}")
         try:
             raw_df_for_prediction = pd.read_csv(args.data_path, index_col='Date', parse_dates=True)
         except FileNotFoundError:
-            print(f"Error: Data file not found at {args.data_path}. Exiting.")
+            print(f"Error: Data file not found at '{args.data_path}'. Exiting.")
             return
         except Exception as e:
-            print(f"Error loading data: {e}. Exiting.")
+            print(f"Error loading data from '{args.data_path}': {e}. Exiting.")
             return
 
-    print(f"Raw prediction data shape: {raw_df_for_prediction.shape}")
+    print(f"Raw prediction data input shape: {raw_df_for_prediction.shape}")
 
     try:
         predictions = get_predictions(
@@ -214,41 +252,24 @@ def main_cli():
         )
 
         if not predictions.empty:
-            print("\nPredictions (first 20 or less):")
-            print(predictions.head(20))
-            print(f"\nNumber of predictions generated: {len(predictions)}")
-            # Here you could also compare with actuals if y_predict_series was processed from get_predictions
-            # For now, this CLI just shows the binary signals.
+            print("\n--- Generated Predictions ---")
+            print(predictions.head(min(20, len(predictions)))) # Print first 20 or fewer
+            print(f"\nTotal number of predictions generated: {len(predictions)}")
+            # To see all predictions, one might save to CSV, e.g.:
+            # predictions.to_csv("ml_predictions.csv")
+            # print("Predictions saved to ml_predictions.csv")
         else:
-            print("No predictions were generated.")
+            print("\nNo predictions were generated. This could be due to insufficient input data "
+                  "to form sequences or other preprocessing issues.")
 
     except FileNotFoundError as e:
-        print(f"Error: {e}")
+        print(f"Prediction Error: {e}. Please ensure model and associated files exist.")
     except Exception as e:
         print(f"An unexpected error occurred during prediction: {e}")
+    print("\n--- Prediction Script Finished ---")
 
 
 if __name__ == '__main__':
-    # predict(args) # The old main CLI call structure
-    main_cli() # New CLI entry point
-    parser = argparse.ArgumentParser(description="Predict using trained LSTM model.")
-    parser.add_argument('--model_path', type=str, required=True, help="Path to the trained model (.pth file). Associated scaler and input_size files will be derived from this path.")
-    parser.add_argument('--data_path', type=str, default="dummy", help="Path to the data CSV for prediction or 'dummy'.")
-    parser.add_argument('--num_dummy_rows', type=int, default=100, help="Number of rows for dummy data if data_path is 'dummy'.")
-    # num_dummy_rows_for_input_calc is removed as input_size is now loaded from file
-    parser.add_argument('--sequence_length', type=int, default=20, help="Sequence length (must match training).")
-    # Model parameters - should match the loaded model
-    parser.add_argument('--hidden_size', type=int, default=50, help="Number of features in LSTM hidden state (must match trained model).")
-    parser.add_argument('--num_layers', type=int, default=2, help="Number of LSTM layers (must match trained model).")
-    parser.add_argument('--dropout', type=float, default=0.2, help="Dropout probability (must match trained model).")
-    parser.add_argument('--batch_size', type=int, default=32, help="Batch size for prediction.")
-
-
-    args = parser.parse_args()
-
-    print("Prediction arguments:")
-    for arg, value in sorted(vars(args).items()):
-        print(f"- {arg}: {value}")
-    print("-" * 30)
-
-    predict(args)
+    main_cli()
+    # The redundant argparse setup and predict(args) call previously here are removed.
+    # main_cli() is now the sole entry point for CLI execution.
