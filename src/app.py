@@ -1,116 +1,116 @@
 import streamlit as st
-from core.data_manager import get_spy_data
-from charts.plot_generator import generate_candlestick_chart
-from core.indicator_calculator import calculate_rsi # Import RSI function
-from datetime import datetime, timedelta
+import pandas as pd
 
-# Set page configuration for wider layout
-st.set_page_config(layout="wide")
+# Add project root to sys.path to allow direct imports from src
+import sys
+import os
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-st.title("SPY Candlestick Chart with RSI")
+from src.core.data_manager import fetch_spy_data
+from src.core.indicator_calculator import calculate_rsi
+from src.charts.plot_generator import create_candlestick_chart
 
-# Date inputs
-today = datetime.today()
-default_start_date = today - timedelta(days=365 * 2) # Default to 2 years ago
-default_end_date = today
-
-# Sidebar for controls
-st.sidebar.header("Chart Controls")
-start_date = st.sidebar.date_input(
-    "Start Date",
-    value=default_start_date,
-    min_value=datetime(1990, 1, 1),
-    max_value=today
-)
-end_date = st.sidebar.date_input(
-    "End Date",
-    value=default_end_date,
-    min_value=start_date,
-    max_value=today
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="Trading Analysis Platform",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# RSI Controls
-st.sidebar.subheader("RSI Indicator")
-show_rsi_checkbox = st.sidebar.checkbox("Show RSI", value=True)
-rsi_window = st.sidebar.slider("RSI Window", min_value=2, max_value=30, value=14, step=1, disabled=not show_rsi_checkbox)
-rsi_oversold = st.sidebar.number_input("RSI Oversold Level", min_value=0, max_value=100, value=30, step=1, disabled=not show_rsi_checkbox)
-rsi_overbought = st.sidebar.number_input("RSI Overbought Level", min_value=0, max_value=100, value=70, step=1, disabled=not show_rsi_checkbox)
+# --- Application State ---
+# Using st.session_state to hold data and prevent re-fetching on every interaction
+if 'spy_data' not in st.session_state:
+    st.session_state.spy_data = None
+if 'rsi_period' not in st.session_state:
+    st.session_state.rsi_period = 14 # Default RSI period
 
-
-# Fetch data
-# Convert date objects to string format required by get_spy_data
-start_date_str = start_date.strftime("%Y-%m-%d")
-end_date_str = end_date.strftime("%Y-%m-%d")
-
-@st.cache_data # Cache the data fetching
-def load_data(start, end):
-    data = get_spy_data(start_date=start, end_date=end)
-    return data
-
-@st.cache_data # Cache RSI calculation
-def compute_rsi(data, window):
+# --- Helper Functions ---
+def load_data(ticker="SPY", period="1y", force_refresh=False):
+    """Loads data, using cache by default, unless force_refresh is True."""
+    use_cache_cond = not force_refresh
+    st.write(f"Loading data for {ticker} (Period: {period}, Cache Used: {use_cache_cond})...")
+    data = fetch_spy_data(ticker_symbol=ticker, period=period, use_cache=use_cache_cond)
     if data is not None and not data.empty:
-        return calculate_rsi(data, window=window)
-    return None
+        st.session_state.spy_data = data
+        st.success(f"Successfully loaded data for {ticker} ({len(data)} rows).")
+        # Automatically calculate RSI for the loaded data
+        if 'Close' in st.session_state.spy_data.columns:
+            st.session_state.rsi_values = calculate_rsi(st.session_state.spy_data['Close'],
+                                                        period=st.session_state.rsi_period)
+    else:
+        st.error(f"Failed to load data for {ticker}.")
+        st.session_state.spy_data = None # Clear data on failure
+        st.session_state.rsi_values = None
 
-data_load_state = st.text(f"Loading SPY data for {start_date_str} to {end_date_str}...")
-spy_data_df = load_data(start_date_str, end_date_str)
-data_load_state.text(f"Loading SPY data for {start_date_str} to {end_date_str}... Done!")
 
-if spy_data_df is None or spy_data_df.empty:
-    st.error("No data fetched for the selected date range. Please check the dates or try again later.")
-else:
-    # Calculate RSI if checkbox is selected
-    rsi_series = None
-    if show_rsi_checkbox:
-        rsi_load_state = st.text(f"Calculating RSI with window {rsi_window}...")
-        rsi_series = compute_rsi(spy_data_df.copy(), window=rsi_window) # Use .copy()
-        rsi_load_state.text(f"Calculating RSI with window {rsi_window}... Done!")
+# --- Sidebar ---
+st.sidebar.title("Controls")
 
-    # Generate chart
-    chart_load_state = st.text("Generating chart...")
-    candlestick_fig = generate_candlestick_chart(
-        spy_data_df,
-        ticker="SPY",
-        rsi_series=rsi_series,
-        show_rsi=show_rsi_checkbox,
-        rsi_oversold=rsi_oversold,
-        rsi_overbought=rsi_overbought
+# Data loading section
+st.sidebar.header("Data Loading")
+selected_ticker = st.sidebar.text_input("Ticker Symbol", value="SPY").upper()
+selected_period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"], index=3) # Default 1y
+
+if st.sidebar.button("Load/Refresh Data", key="load_data_button"):
+    with st.spinner(f"Fetching data for {selected_ticker}..."):
+        load_data(ticker=selected_ticker, period=selected_period, force_refresh=True)
+
+# RSI Configuration
+st.sidebar.header("Indicators")
+st.session_state.rsi_period = st.sidebar.slider("RSI Period", min_value=7, max_value=30,
+                                                value=st.session_state.rsi_period, key="rsi_period_slider")
+
+# Re-calculate RSI if period changes and data exists
+if st.session_state.spy_data is not None and 'Close' in st.session_state.spy_data.columns:
+    # Check if RSI needs recalculation (e.g. period changed)
+    # This simple check might recalculate more than needed, but is fine for now.
+    # A more robust way would be to store the period used for the current rsi_values.
+    st.session_state.rsi_values = calculate_rsi(st.session_state.spy_data['Close'],
+                                                period=st.session_state.rsi_period)
+
+
+# --- Main Page ---
+st.title(f"📊 {selected_ticker} Financial Analysis")
+
+# Initial data load if not already loaded
+if st.session_state.spy_data is None:
+    with st.spinner("Performing initial data load for SPY (1 year)..."):
+        load_data(ticker="SPY", period="1y") # Initial load for SPY
+
+# Display Chart
+if st.session_state.spy_data is not None:
+    st.header("Candlestick Chart with RSI")
+
+    # Retrieve RSI values from session state
+    rsi_to_plot = st.session_state.get('rsi_values', None)
+
+    if rsi_to_plot is None and 'Close' in st.session_state.spy_data.columns : # Should have been calculated on load
+         rsi_to_plot = calculate_rsi(st.session_state.spy_data['Close'], period=st.session_state.rsi_period)
+         st.session_state.rsi_values = rsi_to_plot
+
+
+    chart_fig = create_candlestick_chart(
+        df=st.session_state.spy_data,
+        ticker_symbol=selected_ticker,
+        rsi_series=rsi_to_plot,
+        rsi_period=st.session_state.rsi_period
     )
-    chart_load_state.text("Generating chart... Done!")
+    st.plotly_chart(chart_fig, use_container_width=True)
 
-    st.plotly_chart(candlestick_fig, use_container_width=True)
+    # Display raw data in an expander
+    with st.expander(f"View Raw Data for {selected_ticker}"):
+        st.dataframe(st.session_state.spy_data)
 
-    st.subheader("Raw Data (Last 5 rows)")
-    st.dataframe(spy_data_df.tail())
+    if rsi_to_plot is not None:
+        with st.expander(f"View RSI Data (Period: {st.session_state.rsi_period})"):
+            st.dataframe(rsi_to_plot)
+else:
+    st.warning(f"No data loaded for {selected_ticker}. Please load data using the sidebar controls.")
 
+st.sidebar.markdown("---")
+st.sidebar.info("Built with FinRL & Streamlit")
 
-# App information and instructions moved to sidebar and expanded
-st.sidebar.divider()
-st.sidebar.header("About")
-st.sidebar.info(
-    "This application displays an interactive candlestick chart for SPY (S&P 500 ETF) data, "
-    "with an optional Relative Strength Index (RSI) indicator. "
-    "Data is fetched from Yahoo Finance via the `yfinance` library. "
-    "The chart is generated using `plotly`."
-)
-st.sidebar.header("Instructions")
-st.sidebar.markdown("""
-- **Date Range:** Select the start and end dates in the sidebar.
-- **RSI Display:**
-    - Check 'Show RSI' to display the RSI indicator.
-    - Adjust the RSI window period.
-    - Set custom oversold and overbought levels.
-- **Chart Interactivity:**
-    - **Zoom:** Use the mouse wheel or the range slider at the bottom of the chart.
-    - **Pan:** Click and drag on the chart.
-    - **Tooltips:** Hover over data points to see detailed values (OHLCV, RSI).
-    - **Date Range Shortcuts:** Use the buttons (1m, 6m, YTD, 1y, All) above the chart.
-""")
-
-# To run this app:
-# 1. Ensure you have yfinance, plotly, streamlit, pandas, nbformat installed:
-#    pip install -r requirements.txt
-# 2. Ensure the application is not already running from a previous step.
-# 3. Navigate to the root directory of the project.
-# 4. Run `streamlit run src/app.py` in your terminal.
+# To run this app: streamlit run src/app.py
