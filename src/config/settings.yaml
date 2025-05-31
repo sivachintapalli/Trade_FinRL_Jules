@@ -1,0 +1,25 @@
+# Application settings
+
+# Data Manager Configuration
+data_manager:
+  default_ticker: "SPY"
+  cache_dir: "data/cache/" # Relative to project root
+  cache_file_name_template: "{ticker}_daily.csv"
+  cache_expiry_days: 1
+  # تاريخ البدء الافتراضي لجلب البيانات (YYYY-MM-DD). اتركه فارغًا لاستخدام الفترة الافتراضية لـ yfinance.
+  # Default start date for fetching data (YYYY-MM-DD). Leave empty to use yfinance default period.
+  default_start_date: "2020-01-01" # Specific start date
+  # تاريخ الانتهاء الافتراضي لجلب البيانات (YYYY-MM-DD). اتركه فارغًا لجلب البيانات حتى اليوم.
+  # Default end date for fetching data (YYYY-MM-DD). Leave empty to fetch until today.
+  default_end_date: "" # Empty means today for yfinance if start is a date, or ignored if start is period
+
+# Charting Configuration (Placeholder)
+charting:
+  default_rsi_period: 14
+  candlestick_volume_bar: True
+
+# ML Configuration (Placeholder)
+ml_models:
+  default_model_path: "models/trained_model.pth"
+
+# Add other configurations as needed

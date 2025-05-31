@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+env/
+.env
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Data files
+data/cache/
+data/processed/
+# Keep the directories, but ignore their contents by default.
+# If specific processed files NEED to be versioned, they can be added explicitly with !.
+# For cache, we definitely want to ignore.
+# data/cache/*
+# !data/cache/.gitkeep
+# data/processed/*
+# !data/processed/.gitkeep
+
+# Notebooks
+.ipynb_checkpoints
+
+# Test artifacts
+.pytest_cache/
+coverage.xml
+htmlcov/
+.tox/
+
+# OS-specific
+.DS_Store
+Thumbs.db
