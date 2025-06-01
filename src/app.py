@@ -408,6 +408,26 @@ if st.session_state.spy_data is not None:
     # Prepare custom indicators' data for the plotting function
     custom_indicators_to_plot = []
     for ind_info in st.session_state.active_custom_indicators:
+        # --- Start of temporary diagnostic code ---
+        st.write(f"--- Debug: Processing Indicator ---")
+        st.write(f"Name: {ind_info.get('name', 'N/A')}")
+        st.write(f"Instance Type: {type(ind_info.get('instance'))}")
+
+        is_saty_instance = False
+        if 'instance' in ind_info and ind_info['instance'] is not None:
+            try:
+                # Make sure SatyPhaseOscillator is correctly imported in this scope
+                from src.indicators.saty_phase_oscillator import SatyPhaseOscillator as SPO_Diagnostic_Check
+                is_saty_instance = isinstance(ind_info['instance'], SPO_Diagnostic_Check)
+            except ImportError:
+                st.write("Error: Could not import SatyPhaseOscillator for diagnostic check.")
+                is_saty_instance = False # Or handle error appropriately
+
+        st.write(f"Is SatyPhaseOscillator instance? {is_saty_instance}")
+        st.write(f"Data Type: {type(ind_info.get('data'))}")
+        st.write(f"--- End Debug ---")
+        # --- End of temporary diagnostic code ---
+
         # Check if the indicator is SatyPhaseOscillator by instance type
         if isinstance(ind_info['instance'], SatyPhaseOscillator):
             # ind_info['data'] is now the dictionary from SatyPhaseOscillator.calculate()
