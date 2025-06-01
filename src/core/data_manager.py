@@ -100,24 +100,28 @@ def fetch_spy_data(ticker_symbol="SPY", period="5y", interval="1d", use_cache=Tr
             print(f"Error creating cache directory {CACHE_DIR}: {e}")
             return None
 
-    cache_file_path = os.path.join(CACHE_DIR, f"{ticker_symbol.upper()}_daily.csv")
+    cache_file_path = os.path.join(CACHE_DIR, f"{ticker_symbol.upper()}_{interval}.csv") # Include interval in cache filename
     data = None
 
     if use_cache and os.path.exists(cache_file_path):
         try:
             mod_time = os.path.getmtime(cache_file_path)
-            # Check if cache is less than 1 day old
-            if datetime.now() - datetime.fromtimestamp(mod_time) < timedelta(days=1):
-                print(f"Loading {ticker_symbol.upper()} data from cache: {cache_file_path}")
+
+            cache_duration = timedelta(days=1)
+            if interval == "1m":
+                cache_duration = timedelta(hours=1) # Shorter cache for 1-minute data
+
+            if datetime.now() - datetime.fromtimestamp(mod_time) < cache_duration:
+                print(f"Loading {ticker_symbol.upper()} ({interval}) data from cache: {cache_file_path}")
                 data = pd.read_csv(cache_file_path, index_col='Date', parse_dates=True)
             else:
-                print(f"Cache for {ticker_symbol.upper()} is older than 1 day. Fetching fresh data.")
+                print(f"Cache for {ticker_symbol.upper()} ({interval}) is older than {cache_duration}. Fetching fresh data.")
         except Exception as e:
-            print(f"Error reading from cache or checking mod time for {ticker_symbol.upper()}: {e}. Fetching fresh data.")
+            print(f"Error reading from cache or checking mod time for {ticker_symbol.upper()} ({interval}): {e}. Fetching fresh data.")
 
     was_fetched_freshly = False
     if data is None: # If cache was not used, not valid, or failed to load
-        print(f"Fetching fresh data for {ticker_symbol.upper()}...")
+        print(f"Fetching fresh data for {ticker_symbol.upper()} ({interval})...") # Added interval to print
         try:
             stock = yf.Ticker(ticker_symbol)
             fetched_data = stock.history(period=period, interval=interval)
@@ -132,7 +136,7 @@ def fetch_spy_data(ticker_symbol="SPY", period="5y", interval="1d", use_cache=Tr
             return None
 
     if data is None:
-        print(f"Failed to load or fetch data for {ticker_symbol.upper()}.")
+        print(f"Failed to load or fetch data for {ticker_symbol.upper()} ({interval}).") # Added interval to print
         return None
 
     # ==== COMMON DATA PROCESSING ====
@@ -199,10 +203,10 @@ def fetch_spy_data(ticker_symbol="SPY", period="5y", interval="1d", use_cache=Tr
             rows_before_dropna = len(data)
             data.dropna(subset=cols_to_check_for_nan_drop, inplace=True)
             if len(data) < rows_before_dropna:
-                print(f"Dropped {rows_before_dropna - len(data)} rows with NaNs in critical columns for {ticker_symbol.upper()}.")
+                print(f"Dropped {rows_before_dropna - len(data)} rows with NaNs in critical columns for {ticker_symbol.upper()} ({interval}).") # Added interval
 
     except Exception as e_process:
-        print(f"Error during common data processing for {ticker_symbol.upper()}: {e_process}")
+        print(f"Error during common data processing for {ticker_symbol.upper()} ({interval}): {e_process}") # Added interval
         return None # Return None if processing fails
     # ==== END COMMON DATA PROCESSING ====
 
@@ -210,9 +214,9 @@ def fetch_spy_data(ticker_symbol="SPY", period="5y", interval="1d", use_cache=Tr
     if was_fetched_freshly and use_cache:
         try:
             data.to_csv(cache_file_path)
-            print(f"Data cached to {cache_file_path}")
+            print(f"Data cached to {cache_file_path} (Ticker: {ticker_symbol.upper()}, Interval: {interval})") # Added interval
         except Exception as e:
-            print(f"Error caching fully processed data to {cache_file_path}: {e}")
+            print(f"Error caching fully processed data to {cache_file_path} (Ticker: {ticker_symbol.upper()}, Interval: {interval}): {e}") # Added interval
 
     return data
 

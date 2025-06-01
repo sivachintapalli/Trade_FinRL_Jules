@@ -51,6 +51,7 @@ from src.core.indicator_calculator import calculate_rsi # Will be replaced or au
 from src.charts.plot_generator import create_candlestick_chart
 from src.core.indicator_manager import discover_indicators
 from src.core.custom_indicator_interface import CustomIndicator
+from src.indicators.saty_phase_oscillator import SatyPhaseOscillator # Added import
 import inspect # For inspecting indicator parameters
 import subprocess # For running train.py
 from src.ml.predict import get_predictions # Import the new function
@@ -97,9 +98,9 @@ if 'ml_dropout' not in st.session_state:
 
 
 # --- Helper Functions ---
-def load_data(ticker="SPY", period="1y", force_refresh=False):
+def load_data(ticker="SPY", period_selection="1y", force_refresh=False): # Renamed period to period_selection
     """
-    Loads historical stock data for a given ticker symbol and period.
+    Loads historical stock data for a given ticker symbol, period, and interval.
 
     This function fetches data using `fetch_spy_data` and stores it in
     `st.session_state.spy_data`. It also calculates RSI values for the
@@ -107,17 +108,29 @@ def load_data(ticker="SPY", period="1y", force_refresh=False):
 
     Args:
         ticker (str, optional): The stock ticker symbol. Defaults to "SPY".
-        period (str, optional): The period for which to fetch data (e.g., "1y", "6mo").
-                                Defaults to "1y".
+        period_selection (str, optional): The user's period/interval selection from the UI
+                                (e.g., "1m", "1y"). Defaults to "1y".
         force_refresh (bool, optional): If True, forces a refresh of the data,
                                         bypassing any cached data. Defaults to False.
     """
     use_cache_cond = not force_refresh
-    st.write(f"Loading data for {ticker} (Period: {period}, Cache Used: {use_cache_cond})...")
-    data = fetch_spy_data(ticker_symbol=ticker, period=period, use_cache=use_cache_cond)
+
+    current_interval = "1d" # Default interval
+    current_period = period_selection # Actual period to pass to yfinance
+
+    if period_selection == "1m":
+        current_interval = "1m"
+        # For 1m data, yfinance typically provides last 7 days, or up to 60 days if period is specified.
+        # Let's use "7d" as the period for fetching to ensure we get a decent amount of recent data.
+        current_period = "7d"
+        st.sidebar.caption(f"Fetching 1-min data for {ticker} for the last 7 days.")
+
+    st.write(f"Loading data for {ticker} (Selection: {period_selection}, Fetch Interval: {current_interval}, Fetch Period: {current_period}, Cache Used: {use_cache_cond})...")
+    data = fetch_spy_data(ticker_symbol=ticker, period=current_period, interval=current_interval, use_cache=use_cache_cond) # Pass interval
+
     if data is not None and not data.empty:
         st.session_state.spy_data = data
-        st.success(f"Successfully loaded data for {ticker} ({len(data)} rows).")
+        st.success(f"Successfully loaded data for {ticker} ({len(data)} rows, Interval: {current_interval}).")
         # Automatically calculate RSI for the loaded data
         if 'Close' in st.session_state.spy_data.columns:
             st.session_state.rsi_values = calculate_rsi(st.session_state.spy_data['Close'],
@@ -135,11 +148,36 @@ st.sidebar.title("Controls")
 # Data loading section: Allows users to specify a ticker and period, and load data.
 st.sidebar.header("Data Loading")
 selected_ticker = st.sidebar.text_input("Ticker Symbol", value="SPY").upper()
-selected_period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"], index=3) # Default 1y
+# Added "1m" option, updated default index if necessary (assuming "1y" is still preferred default)
+selected_period = st.sidebar.selectbox("Data Period", ["1m", "1mo", "3mo", "6mo", "1y", "2y", "5y", "max"], index=4)
 
 if st.sidebar.button("Load/Refresh Data", key="load_data_button"):
-    with st.spinner(f"Fetching data for {selected_ticker}..."):
-        load_data(ticker=selected_ticker, period=selected_period, force_refresh=True)
+    with st.spinner(f"Fetching data for {selected_ticker} (Period/Interval: {selected_period})..."): # Updated spinner
+        load_data(ticker=selected_ticker, period_selection=selected_period, force_refresh=True) # Pass period_selection
+
+# --- Data Export Section ---
+st.sidebar.header("Data Export")
+if 'spy_data' in st.session_state and st.session_state.spy_data is not None and not st.session_state.spy_data.empty:
+    # Prepare data for download
+    csv_data = st.session_state.spy_data.to_csv(index=True).encode('utf-8')
+
+    # Determine the actual interval used for fetching for the filename
+    current_interval_for_filename = "1d" # Default
+    if selected_period == "1m": # selected_period holds the user's dropdown choice
+        current_interval_for_filename = "1m"
+
+    # Construct a descriptive filename
+    download_filename = f"{selected_ticker}_{selected_period}_{current_interval_for_filename}_data.csv"
+
+    st.sidebar.download_button(
+        label="Download Data as CSV",
+        data=csv_data,
+        file_name=download_filename,
+        mime='text/csv',
+        key='download_csv_button'
+    )
+else:
+    st.sidebar.info("Load data first to enable download.")
 
 # RSI Configuration: Allows adjustment of the RSI calculation period.
 st.sidebar.header("Built-in Indicators")
@@ -315,13 +353,22 @@ if st.sidebar.button("Generate & Display ML Signals", key="generate_ml_signals")
 
 # Optional: Button to trigger training of a new ML model
 if st.sidebar.button("Train New ML Model (SPY - Default Params)", key="train_ml_model"):
-    spy_data_path = f"data/cache/{selected_ticker}_daily.csv"
+    # ML training should ideally use consistent daily data for now.
+    # Construct path to the daily cache file for the selected_ticker or SPY.
+    train_ticker_for_path = selected_ticker if selected_ticker == "SPY" else "SPY" # Prioritize SPY for training if not current
+    spy_data_path = f"data/cache/{train_ticker_for_path}_1d.csv" # Explicitly use 1d interval for training path
+
     if selected_ticker != "SPY":
-        st.sidebar.warning("Training is currently hardcoded for SPY data. Ensure SPY data is loaded/cached.")
-        spy_data_path = "data/cache/SPY_daily.csv" # Default to SPY cache path
+        st.sidebar.warning(f"Training is hardcoded for SPY. Using SPY_1d.csv. Ensure SPY 1-day data is cached (load SPY with 1y period).")
+
+    if not os.path.exists(spy_data_path) and selected_ticker == "SPY":
+        # If SPY is selected, but its 1d cache doesn't exist, try the general selected_ticker path with 1d.
+        # This case might occur if user selected SPY, then "1m", then wants to train.
+        spy_data_path = f"data/cache/{selected_ticker}_1d.csv"
+
 
     if os.path.exists(spy_data_path):
-        st.sidebar.info("Starting ML model training... This may take a while.")
+        st.sidebar.info(f"Starting ML model training using {spy_data_path}... This may take a while.")
         try:
             # Command to run the training script
             command = [
@@ -349,8 +396,8 @@ st.title(f"📊 {selected_ticker} Financial Analysis")
 
 # Initial data load for SPY if no data is currently in session state
 if st.session_state.spy_data is None:
-    with st.spinner("Performing initial data load for SPY (1 year)..."):
-        load_data(ticker="SPY", period="1y") # Default load on first run
+    with st.spinner("Performing initial data load for SPY (1 year, 1 day interval)..."): # Updated spinner
+        load_data(ticker="SPY", period_selection="1y") # Default load uses 1d interval implicitly
 
 # Display Chart if data is available
 if st.session_state.spy_data is not None:
@@ -361,17 +408,27 @@ if st.session_state.spy_data is not None:
     # Prepare custom indicators' data for the plotting function
     custom_indicators_to_plot = []
     for ind_info in st.session_state.active_custom_indicators:
-        if isinstance(ind_info['data'], pd.Series):
+        # Check if the indicator is SatyPhaseOscillator by instance type
+        if isinstance(ind_info['instance'], SatyPhaseOscillator):
+            custom_indicators_to_plot.append({
+                "name": ind_info['name'],
+                "plot_type": "saty_phase_oscillator",
+                "data_df": ind_info['data'], # This is the DataFrame from SatyPhaseOscillator.calculate()
+                "params": ind_info['params'] # These are the __init__ params
+            })
+        elif isinstance(ind_info['data'], pd.Series): # Existing logic for simple series
             custom_indicators_to_plot.append({
                 "name": ind_info['data'].name if ind_info['data'].name else ind_info['name'],
                 "series": ind_info['data']
+                # 'plot_type' will default to 'simple_series' in create_candlestick_chart
             })
-        elif isinstance(ind_info['data'], pd.DataFrame): # Handle multi-column indicators
+        elif isinstance(ind_info['data'], pd.DataFrame): # Existing logic for other DataFrames
             for col in ind_info['data'].columns:
                 series_data = ind_info['data'][col]
                 custom_indicators_to_plot.append({
                     "name": series_data.name if series_data.name else f"{ind_info['name']}_{col}",
                     "series": series_data
+                    # 'plot_type' will default to 'simple_series' in create_candlestick_chart
                 })
 
     # Create and display the main financial chart
