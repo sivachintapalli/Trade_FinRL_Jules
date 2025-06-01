@@ -275,7 +275,7 @@ def create_candlestick_chart(df: pd.DataFrame, ticker_symbol: str = "SPY",
         title=chart_title,
         xaxis_rangeslider_visible=False, # Hide the default rangeslider
         template="plotly_dark", # Using a dark theme
-        height=max(400, 250 + (num_rows * 150)), # Adjust height based on number of subplots
+        height=max(600, 350 + (num_rows * 200)), # Adjust height based on number of subplots
         legend_tracegroupgap=20 # Space between legend groups
     )
 
