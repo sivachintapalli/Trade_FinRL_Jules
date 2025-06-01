@@ -1,4 +1,5 @@
-# Trading Analysis Platform
+
+ Trading Analysis Platform
 
 ## Introduction
 
