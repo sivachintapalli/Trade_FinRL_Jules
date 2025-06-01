@@ -210,58 +210,133 @@ def create_candlestick_chart(df: pd.DataFrame, ticker_symbol: str = "SPY",
             indicator_name = indicator_info.get('name', f'CustomInd_{current_row-1}')
 
             if plot_type == 'saty_phase_oscillator':
-                spo_df = indicator_info.get('data_df')
-                spo_params = indicator_info.get('params', {})
+                data_dict = indicator_info.get('data_dict')
+                spo_params = indicator_info.get('params', {}) # Constructor params
 
-                if spo_df is not None and isinstance(spo_df, pd.DataFrame) and not spo_df.empty:
-                    fig.add_trace(go.Scatter(x=main_df_index, y=spo_df['oscillator'].reindex(main_df_index),
-                                             mode='lines', name='Oscillator', connectgaps=True,
-                                             legendgroup=f"group{current_row}", legendgrouptitle_text=indicator_name),
-                                  row=current_row, col=1)
-                    zone_lines = {
-                        'extended_up_zone': {'y': 100.0, 'color': 'rgba(200,200,200,0.5)'},
-                        'distribution_zone': {'y': 61.8, 'color': 'rgba(150,150,150,0.5)'},
-                        'neutral_up_zone': {'y': 23.6, 'color': 'rgba(100,100,100,0.5)'},
-                        'neutral_down_zone': {'y': -23.6, 'color': 'rgba(100,100,100,0.5)'},
-                        'accumulation_zone': {'y': -61.8, 'color': 'rgba(150,150,150,0.5)'},
-                        'extended_down_zone': {'y': -100.0, 'color': 'rgba(200,200,200,0.5)'}
-                    }
-                    for _, props in zone_lines.items():
-                        fig.add_hline(y=props['y'], line_dash="dot", line_color=props['color'], row=current_row, col=1)
+                if data_dict is None:
+                    print(f"Warning: Saty Phase Oscillator data_dict for '{indicator_name}' is missing. Skipping plot row.")
+                    current_row +=1 # Ensure row increments even if skipped
+                    continue
 
-                    crossover_signals = {
-                        'leaving_accumulation_signal': {'color': 'yellow', 'symbol': 'circle', 'visible': spo_params.get('show_zone_crosses', True)},
-                        'leaving_distribution_signal': {'color': 'yellow', 'symbol': 'circle', 'visible': spo_params.get('show_zone_crosses', True)},
-                        'leaving_extreme_down_signal': {'color': 'lime', 'symbol': 'circle', 'visible': spo_params.get('show_extreme_crosses', True)},
-                        'leaving_extreme_up_signal': {'color': 'lime', 'symbol': 'circle', 'visible': spo_params.get('show_extreme_crosses', True)}
+                oscillator_series = data_dict.get('oscillator')
+                plot_colors_series = data_dict.get('colors') # This is already a Series
+                zones = data_dict.get('zones')
+                signals = data_dict.get('signals')
+                colors_map_ref = data_dict.get('colors_map', {
+                    'green': '#00ff00', 'red': '#ff0000', 'magenta': '#ff00ff',
+                    'gray': '#969696', 'yellow': '#ffff00', 'lime': '#00ff00'
+                }) # Default if not in data_dict
+
+                if not isinstance(oscillator_series, pd.Series) or \
+                   not isinstance(plot_colors_series, pd.Series) or \
+                   not isinstance(zones, dict) or \
+                   not isinstance(signals, dict):
+                    print(f"Warning: Key data missing or invalid type in Saty Phase Oscillator data_dict for '{indicator_name}'. Skipping plot row.")
+                    current_row +=1
+                    continue
+
+                # Align with main DataFrame index
+                oscillator_series = oscillator_series.reindex(main_df_index)
+                plot_colors_series = plot_colors_series.reindex(main_df_index)
+
+                # Plotting oscillator parts by color
+                unique_colors_in_data = plot_colors_series.unique()
+                plotted_legend_for_osc = False
+
+                for color_hex in unique_colors_in_data:
+                    if pd.isna(color_hex): continue
+
+                    osc_segment = oscillator_series.where(plot_colors_series == color_hex)
+
+                    is_first_segment_for_legend = not plotted_legend_for_osc
+
+                    fig.add_trace(go.Scatter(
+                        x=osc_segment.index,
+                        y=osc_segment,
+                        mode='lines',
+                        name=indicator_name if is_first_segment_for_legend else None,
+                        line=dict(color=color_hex, width=2),
+                        connectgaps=False,
+                        legendgroup=f"group_spo_{current_row}", # Group all parts of oscillator
+                        legendgrouptitle_text=indicator_name if is_first_segment_for_legend else None,
+                        showlegend=is_first_segment_for_legend
+                    ), row=current_row, col=1)
+
+                    if is_first_segment_for_legend:
+                        plotted_legend_for_osc = True
+
+                # Zone Lines
+                if zones:
+                    for zone_name, zone_value in zones.items():
+                        fig.add_hline(y=zone_value, line_dash="dot",
+                                      line_color=colors_map_ref.get('gray', 'gray'),
+                                      row=current_row, col=1,
+                                      annotation_text=zone_name.replace('_', ' ').title(),
+                                      annotation_position="right")
+
+                # Signal Markers
+                if signals:
+                    signal_marker_styles = {
+                        'leaving_accumulation': {'color': colors_map_ref.get('yellow', 'yellow'), 'symbol': 'circle'},
+                        'leaving_extreme_down': {'color': colors_map_ref.get('lime', 'lime'), 'symbol': 'circle-open'},
+                        'leaving_distribution': {'color': colors_map_ref.get('yellow', 'yellow'), 'symbol': 'diamond'},
+                        'leaving_extreme_up': {'color': colors_map_ref.get('red', 'red'), 'symbol': 'diamond-open'}
                     }
-                    for sig_col, props in crossover_signals.items():
-                        if props['visible'] and sig_col in spo_df:
-                            sig_series_to_plot = spo_df[sig_col].reindex(main_df_index).dropna()
-                            if not sig_series_to_plot.empty:
-                                fig.add_trace(go.Scatter(x=sig_series_to_plot.index, y=sig_series_to_plot, mode='markers',
-                                                         name=sig_col.replace('_signal','').replace('_', ' ').title(),
-                                                         marker_symbol=props['symbol'], marker_color=props['color'], marker_size=8,
-                                                         legendgroup=f"group{current_row}"),
-                                              row=current_row, col=1)
-                    fig.update_yaxes(title_text=indicator_name[:15], row=current_row, col=1, autorange=False, range=[-150, 150])
-                    if num_rows > current_row: fig.update_xaxes(showticklabels=False, row=current_row, col=1)
-                    current_row += 1
-                else:
-                    print(f"Warning: Saty Phase Oscillator data for '{indicator_name}' is missing or invalid. Skipping plot row.")
+                    show_any_signal_legend = True # To show legend group title only once for signals
+
+                    for signal_name, signal_series_bool in signals.items():
+                        signal_series_bool = signal_series_bool.reindex(main_df_index)
+                        true_signals_indices = signal_series_bool[signal_series_bool == True].index
+
+                        if not true_signals_indices.empty:
+                            marker_y_values = oscillator_series.loc[true_signals_indices]
+                            style = signal_marker_styles.get(signal_name, {'color': 'cyan', 'symbol': 'cross'})
+
+                            show_this_signal = True # Default
+                            param_to_check = None
+                            if "accumulation" in signal_name or "distribution" in signal_name:
+                                param_to_check = "show_zone_crosses"
+                            elif "extreme" in signal_name:
+                                param_to_check = "show_extreme_crosses"
+
+                            if param_to_check and not spo_params.get(param_to_check, True):
+                                show_this_signal = False
+
+                            if show_this_signal and not marker_y_values.empty:
+                                fig.add_trace(go.Scatter(
+                                    x=true_signals_indices,
+                                    y=marker_y_values,
+                                    mode='markers',
+                                    name=signal_name.replace('_', ' ').title(),
+                                    marker_symbol=style['symbol'],
+                                    marker_color=style['color'],
+                                    marker_size=9, # Slightly larger markers
+                                    legendgroup=f"group_spo_signals_{current_row}",
+                                    legendgrouptitle_text="Signals" if show_any_signal_legend else None,
+                                    showlegend=True
+                                ), row=current_row, col=1)
+                                if show_any_signal_legend: show_any_signal_legend = False
+
+                fig.update_yaxes(title_text=indicator_name[:15], row=current_row, col=1, autorange=False, range=[-150, 150])
+                if num_rows > current_row: fig.update_xaxes(showticklabels=False, row=current_row, col=1)
+                current_row += 1
+
             elif plot_type == 'simple_series':
                 series_data = indicator_info.get('series')
                 if isinstance(series_data, pd.Series) and not series_data.empty:
                     aligned_series = series_data.reindex(main_df_index)
                     fig.add_trace(go.Scatter(x=aligned_series.index, y=aligned_series,
-                                             mode='lines', name=indicator_name, connectgaps=True,
-                                             legendgroup=f"group{current_row}", legendgrouptitle_text=indicator_name),
+                                             mode='lines', name=indicator_name, connectgaps=True, # connectgaps for simple series
+                                             legendgroup=f"group_simple_{current_row}", legendgrouptitle_text=indicator_name),
                                   row=current_row, col=1)
                     fig.update_yaxes(title_text=indicator_name[:15], row=current_row, col=1) # Truncate long names
                     if num_rows > current_row: fig.update_xaxes(showticklabels=False, row=current_row, col=1)
                     current_row += 1
                 else:
                     print(f"Warning: Custom indicator '{indicator_name}' (simple_series) data is missing or invalid. Skipping plot row.")
+                    # Increment current_row even if skipping to maintain subplot structure integrity if other indicators follow
+                    if num_rows > current_row: fig.update_xaxes(showticklabels=False, row=current_row, col=1) # Hide X axis if not last
+                    current_row += 1
             # else: # Placeholder for other plot types
             #     print(f"Warning: Unknown plot_type '{plot_type}' for indicator '{indicator_name}'. Skipping plot row.")
 

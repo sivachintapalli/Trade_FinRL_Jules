@@ -410,11 +410,12 @@ if st.session_state.spy_data is not None:
     for ind_info in st.session_state.active_custom_indicators:
         # Check if the indicator is SatyPhaseOscillator by instance type
         if isinstance(ind_info['instance'], SatyPhaseOscillator):
+            # ind_info['data'] is now the dictionary from SatyPhaseOscillator.calculate()
             custom_indicators_to_plot.append({
-                "name": ind_info['name'],
-                "plot_type": "saty_phase_oscillator",
-                "data_df": ind_info['data'], # This is the DataFrame from SatyPhaseOscillator.calculate()
-                "params": ind_info['params'] # These are the __init__ params
+                "name": ind_info['name'],  # Or a more specific name
+                "plot_type": "saty_phase_oscillator", # Crucial for plot_generator
+                "data_dict": ind_info['data'],   # Pass the entire dictionary
+                "params": ind_info['params']     # Pass constructor parameters
             })
         elif isinstance(ind_info['data'], pd.Series): # Existing logic for simple series
             custom_indicators_to_plot.append({
@@ -423,6 +424,8 @@ if st.session_state.spy_data is not None:
                 # 'plot_type' will default to 'simple_series' in create_candlestick_chart
             })
         elif isinstance(ind_info['data'], pd.DataFrame): # Existing logic for other DataFrames
+            # This section should NOT process the Saty Oscillator if it was previously returning a DataFrame.
+            # The check for SatyPhaseOscillator instance above handles it first.
             for col in ind_info['data'].columns:
                 series_data = ind_info['data'][col]
                 custom_indicators_to_plot.append({
@@ -430,6 +433,8 @@ if st.session_state.spy_data is not None:
                     "series": series_data
                     # 'plot_type' will default to 'simple_series' in create_candlestick_chart
                 })
+        else:
+            st.warning(f"Indicator {ind_info['name']} produced an unexpected data type: {type(ind_info['data'])}. Cannot plot.")
 
     # Create and display the main financial chart
     chart_fig = create_candlestick_chart(
@@ -452,9 +457,26 @@ if st.session_state.spy_data is not None:
 
     if custom_indicators_to_plot:
         with st.expander("View Custom Indicator Data"):
-            for ind_data in custom_indicators_to_plot:
-                st.markdown(f"**{ind_data['name']}**")
-                st.dataframe(ind_data['series'])
+            for ind_data_item in custom_indicators_to_plot: # Renamed to avoid conflict with outer 'ind_data' if any
+                st.markdown(f"**{ind_data_item['name']}**")
+                if ind_data_item.get('plot_type') == 'saty_phase_oscillator':
+                    # For SatyPhaseOscillator, display its dictionary components or a summary
+                    # For now, let's display the main oscillator Series and compression_tracker for quick view
+                    if 'data_dict' in ind_data_item and isinstance(ind_data_item['data_dict'], dict):
+                        if 'oscillator' in ind_data_item['data_dict']:
+                             st.markdown("Oscillator:")
+                             st.dataframe(ind_data_item['data_dict']['oscillator'])
+                        if 'compression_tracker' in ind_data_item['data_dict']:
+                             st.markdown("Compression Tracker:")
+                             st.dataframe(ind_data_item['data_dict']['compression_tracker'])
+                        # Could add more elements from data_dict if needed for display here
+                    else:
+                        st.text("Saty Phase Oscillator data is not in the expected dictionary format.")
+                elif 'series' in ind_data_item: # For simple series indicators
+                    st.dataframe(ind_data_item['series'])
+                # Potentially handle other complex types if they are added later
+                else:
+                    st.text("Data format not recognized for display in expander.")
 else:
     st.warning(f"No data loaded for {selected_ticker}. Please load data using the sidebar controls.")
 
